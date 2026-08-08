@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>P2P Realtime Chat</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- PeerJS for WebRTC wrapper -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <!-- FontAwesome for Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    /* Custom scrollbar for chat box */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.05);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col font-sans antialiased">
+
+  <!-- Top Navigation Header -->
+  <header class="bg-slate-800 border-b border-slate-700 px-4 py-3 flex items-center justify-between shadow-md">
+    <div class="flex items-center space-x-3">
+      <div class="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-indigo-500/30">
+        <i class="fa-solid fa-[#fa-network-wired] fa-diagram-project"></i>
+      </div>
+      <div>
+        <h1 class="font-bold text-lg leading-tight text-white">P2P Peer Chat</h1>
+        <p class="text-xs text-slate-400">WebRTC DataChannel (No Server Relay)</p>
+      </div>
+    </div>
+    <div id="status-badge" class="px-3 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center space-x-1.5">
+      <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+      <span id="status-text">ID生成中...</span>
+    </div>
+  </header>
+
+  <!-- Main Content Layout -->
+  <main class="flex-1 max-w-4xl w-full mx-auto p-4 flex flex-col md:flex-row gap-4 h-[calc(100vh-65px)]">
+
+    <!-- Sidebar / Connection Panel -->
+    <aside class="w-full md:w-80 bg-slate-800 rounded-2xl p-4 border border-slate-700/60 flex flex-col justify-between shrink-0 shadow-xl">
+      <div class="space-y-5">
+        <!-- My Peer ID Box -->
+        <div>
+          <label class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2 block">あなたの Peer ID</label>
+          <div class="flex items-center bg-slate-900/80 rounded-xl border border-slate-700 p-1.5 pr-2">
+            <input type="text" id="my-peer-id" readonly value="発行中..." class="bg-transparent text-sm font-mono text-indigo-300 w-full px-2 focus:outline-none select-all" />
+            <button id="btn-copy-id" class="p-2 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg transition" title="IDをコピー">
+              <i class="fa-regular fa-copy"></i>
+            </button>
+          </div>
+          <p class="text-[11px] text-slate-500 mt-1">このIDをチャット相手に共有してください。</p>
+        </div>
+
+        <hr class="border-slate-700/50">
+
+        <!-- Connect to Peer Form -->
+        <div>
+          <label class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2 block">相手の Peer ID に接続</label>
+          <div class="space-y-2">
+            <input type="text" id="target-peer-id" placeholder="相手のIDを入力..." class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition" />
+            <button id="btn-connect" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium py-2 px-4 rounded-xl text-sm transition flex items-center justify-center space-x-2 shadow-lg shadow-indigo-600/30 active:scale-95">
+              <i class="fa-solid fa-plug"></i>
+              <span>P2P 接続開始</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Connection Details Info -->
+        <div id="connection-info" class="hidden bg-slate-900/50 rounded-xl p-3 border border-slate-700/40 text-xs space-y-1 text-slate-400">
+          <div class="flex justify-between"><span class="text-slate-500">接続先:</span> <span id="connected-peer-name" class="font-mono text-slate-300 truncate max-w-[120px]">-</span></div>
+          <div class="flex justify-between"><span class="text-slate-500">通信方式:</span> <span class="text-emerald-400 font-semibold">WebRTC Direct</span></div>
+          <div class="flex justify-between"><span class="text-slate-500">暗号化:</span> <span class="text-indigo-400">DTLS / SRTP (標準)</span></div>
+        </div>
+      </div>
+
+      <!-- Quick Action / Disconnect -->
+      <div class="pt-4 border-t border-slate-700/50">
+        <button id="btn-disconnect" class="hidden w-full bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 font-medium py-2 px-4 rounded-xl text-sm transition flex items-center justify-center space-x-2">
+          <i class="fa-solid fa-power-off"></i>
+          <span>接続を切断</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Chat Area -->
+    <section class="flex-1 bg-slate-800 rounded-2xl border border-slate-700/60 flex flex-col overflow-hidden shadow-xl">
+      
+      <!-- Chat Header -->
+      <div class="px-4 py-3 bg-slate-800/80 border-b border-slate-700/50 flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <span id="active-dot" class="w-2.5 h-2.5 rounded-full bg-slate-500"></span>
+          <h2 id="chat-title" class="font-semibold text-slate-300 text-sm">接続を待機しています...</h2>
+        </div>
+        <button id="btn-clear" class="text-xs text-slate-500 hover:text-slate-300 transition" title="ログをクリア">
+          <i class="fa-solid fa-trash-can"></i>
+        </button>
+      </div>
+
+      <!-- Messages Log Box -->
+      <div id="chat-messages" class="flex-1 p-4 overflow-y-auto space-y-3 bg-slate-900/40">
+        <!-- Welcome System Message -->
+        <div class="text-center py-4">
+          <div class="inline-block bg-slate-800/80 border border-slate-700 text-slate-400 text-xs px-3 py-1.5 rounded-full shadow-sm">
+            <i class="fa-solid fa-shield-halved text-indigo-400 mr-1"></i>
+            端対端（P2P）直接暗号化通信。メッセージはサーバーに一切保存されません。
+          </div>
+        </div>
+      </div>
+
+      <!-- Input Bar -->
+      <div class="p-3 bg-slate-800 border-t border-slate-700/60 flex items-center gap-2">
+        <!-- File Upload Button -->
+        <label id="file-label" class="cursor-pointer bg-slate-700 hover:bg-slate-600 text-slate-300 p-2.5 rounded-xl transition flex items-center justify-center shrink-0 opacity-50 pointer-events-none" title="画像/ファイルを送信">
+          <i class="fa-solid fa-paperclip"></i>
+          <input type="file" id="file-input" class="hidden" accept="image/*,.pdf,.txt,.zip" />
+        </label>
+
+        <!-- Text Input -->
+        <input type="text" id="message-input" disabled placeholder="メッセージを入力 (P2P接続後に利用可能)" class="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition disabled:opacity-50" />
+
+        <!-- Send Button -->
+        <button id="btn-send" disabled class="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-700 disabled:opacity-50 text-white font-medium p-2.5 px-4 rounded-xl transition flex items-center justify-center shrink-0 shadow-lg shadow-indigo-600/30 active:scale-95">
+          <i class="fa-solid fa-paper-plane"></i>
+        </button>
+      </div>
+    </section>
+  </main>
+
+  <!-- Custom Alert/Notification Modal -->
+  <div id="toast" class="fixed bottom-5 right-5 bg-indigo-600 text-white px-4 py-3 rounded-xl shadow-2xl transition-all duration-300 transform translate-y-20 opacity-0 flex items-center space-x-2 z-50">
+    <i id="toast-icon" class="fa-solid fa-circle-info"></i>
+    <span id="toast-msg" class="text-sm font-medium"></span>
+  </div>
+
+  <script>
+    /* Global Application State */
+    let peer = null;
+    let conn = null;
+    let myPeerId = '';
+
+    /* DOM Elements */
+    const myPeerIdInput = document.getElementById('my-peer-id');
+    const targetPeerIdInput = document.getElementById('target-peer-id');
+    const btnCopyId = document.getElementById('btn-copy-id');
+    const btnConnect = document.getElementById('btn-connect');
+    const btnDisconnect = document.getElementById('btn-disconnect');
+    const btnClear = document.getElementById('btn-clear');
+    const statusBadge = document.getElementById('status-badge');
+    const statusText = document.getElementById('status-text');
+    const chatMessages = document.getElementById('chat-messages');
+    const messageInput = document.getElementById('message-input');
+    const btnSend = document.getElementById('btn-send');
+    const fileInput = document.getElementById('file-input');
+    const fileLabel = document.getElementById('file-label');
+    const chatTitle = document.getElementById('chat-title');
+    const activeDot = document.getElementById('active-dot');
+    const connectionInfo = document.getElementById('connection-info');
+    const connectedPeerName = document.getElementById('connected-peer-name');
+
+    // Initialize PeerJS
+    function initPeer() {
+      // Create Peer with automatic ID generation
+      peer = new Peer({
+        debug: 1,
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' }
+          ]
+        }
+      });
+
+      peer.on('open', (id) => {
+        myPeerId = id;
+        myPeerIdInput.value = id;
+        updateStatus('waiting', '相手の接続を待機中');
+        showToast('Peer IDが発行されました', 'success');
+      });
+
+      peer.on('connection', (incomingConn) => {
+        if (conn && conn.open) {
+          // Reject if already connected
+          incomingConn.close();
+          return;
+        }
+        setupConnection(incomingConn);
+      });
+
+      peer.on('error', (err) => {
+        console.error('PeerJS Error:', err);
+        showToast(`エラー: ${err.type}`, 'error');
+        updateStatus('error', 'エラー発生');
+      });
+
+      peer.on('disconnected', () => {
+        updateStatus('waiting', 'シグナリング切断（再接続可能）');
+      });
+    }
+
+    // Setup DataChannel connection handlers
+    function setupConnection(dataConnection) {
+      conn = dataConnection;
+
+      conn.on('open', () => {
+        updateStatus('connected', 'P2P接続確立');
+        connectedPeerName.textContent = conn.peer;
+        chatTitle.textContent = `接続中: ${conn.peer}`;
+        activeDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse';
+        
+        // Enable Controls
+        messageInput.disabled = false;
+        messageInput.placeholder = 'メッセージを入力...';
+        btnSend.disabled = false;
+        fileLabel.classList.remove('opacity-50', 'pointer-events-none');
+        btnDisconnect.classList.remove('hidden');
+        connectionInfo.classList.remove('hidden');
+
+        appendSystemMessage(`相手 (${conn.peer.substring(0, 8)}...) とP2P通信を開始しました！`);
+        playAudioNotification();
+      });
+
+      // Receive Message or File
+      conn.on('data', (data) => {
+        playAudioNotification();
+        if (data.type === 'text') {
+          appendMessage(data.content, 'peer');
+        } else if (data.type === 'file') {
+          appendFileMessage(data, 'peer');
+        }
+      });
+
+      conn.on('close', () => {
+        handleDisconnect('相手が接続を切断しました');
+      });
+
+      conn.on('error', (err) => {
+        console.error('Connection Error:', err);
+        handleDisconnect('通信エラーが発生しました');
+      });
+    }
+
+    // Connect to Target Peer
+    btnConnect.addEventListener('click', () => {
+      const targetId = targetPeerIdInput.value.trim();
+      if (!targetId) {
+        showToast('接続先のPeer IDを入力してください', 'warning');
+        return;
+      }
+      if (targetId === myPeerId) {
+        showToast('自分のIDには接続できません', 'warning');
+        return;
+      }
+
+      updateStatus('connecting', '接続要求送信中...');
+      const dataConn = peer.connect(targetId, {
+        reliable: true
+      });
+      setupConnection(dataConn);
+    });
+
+    // Disconnect Action
+    btnDisconnect.addEventListener('click', () => {
+      if (conn) {
+        conn.close();
+      }
+      handleDisconnect('接続を解除しました');
+    });
+
+    function handleDisconnect(reason) {
+      if (conn) conn = null;
+      updateStatus('waiting', '相手の接続を待機中');
+      
+      // Reset UI
+      messageInput.disabled = true;
+      messageInput.placeholder = 'メッセージを入力 (P2P接続後に利用可能)';
+      btnSend.disabled = true;
+      fileLabel.classList.add('opacity-50', 'pointer-events-none');
+      btnDisconnect.classList.add('hidden');
+      connectionInfo.classList.add('hidden');
+      chatTitle.textContent = '接続を待機しています...';
+      activeDot.className = 'w-2.5 h-2.5 rounded-full bg-slate-500';
+
+      appendSystemMessage(reason);
+    }
+
+    // Send Text Message
+    function sendMessage() {
+      const text = messageInput.value.trim();
+      if (!text || !conn || !conn.open) return;
+
+      const payload = { type: 'text', content: text };
+      conn.send(payload);
+      appendMessage(text, 'self');
+      messageInput.value = '';
+    }
+
+    btnSend.addEventListener('click', sendMessage);
+    messageInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') sendMessage();
+    });
+
+    // Send File
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file || !conn || !conn.open) return;
+
+      // Restrict file size to 10MB for smooth DataChannel transfer
+      if (file.size > 10 * 1024 * 1024) {
+        showToast('ファイルサイズは10MB以下にしてください', 'warning');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const payload = {
+          type: 'file',
+          fileName: file.name,
+          fileType: file.type,
+          fileData: event.target.result
+        };
+        conn.send(payload);
+        appendFileMessage(payload, 'self');
+        showToast('ファイルを送信しました', 'info');
+      };
+      reader.readAsDataURL(file);
+      fileInput.value = '';
+    });
+
+    // Append Chat Text Message
+    function appendMessage(text, sender) {
+      const isSelf = sender === 'self';
+      const wrapper = document.createElement('div');
+      wrapper.className = `flex flex-col ${isSelf ? 'items-end' : 'items-start'}`;
+
+      const bubble = document.createElement('div');
+      bubble.className = `max-w-[80%] rounded-2xl px-4 py-2.5 text-sm shadow-md break-words ${
+        isSelf
+          ? 'bg-indigo-600 text-white rounded-br-none'
+          : 'bg-slate-700 text-slate-100 rounded-bl-none border border-slate-600'
+      }`;
+      
+      // Escape HTML
+      const p = document.createElement('p');
+      p.textContent = text;
+      bubble.appendChild(p);
+
+      const time = document.createElement('span');
+      time.className = 'text-[10px] text-slate-400 mt-1 px-1';
+      time.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      wrapper.appendChild(bubble);
+      wrapper.appendChild(time);
+      chatMessages.appendChild(wrapper);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    // Append File / Image Message
+    function appendFileMessage(fileObj, sender) {
+      const isSelf = sender === 'self';
+      const wrapper = document.createElement('div');
+      wrapper.className = `flex flex-col ${isSelf ? 'items-end' : 'items-start'}`;
+
+      const bubble = document.createElement('div');
+      bubble.className = `max-w-[80%] rounded-2xl p-3 text-sm shadow-md ${
+        isSelf
+          ? 'bg-indigo-600 text-white rounded-br-none'
+          : 'bg-slate-700 text-slate-100 rounded-bl-none border border-slate-600'
+      }`;
+
+      if (fileObj.fileType.startsWith('image/')) {
+        const img = document.createElement('img');
+        img.src = fileObj.fileData;
+        img.alt = fileObj.fileName;
+        img.className = 'max-w-xs max-h-60 rounded-lg object-cover mb-2 border border-black/20';
+        bubble.appendChild(img);
+      }
+
+      const fileInfo = document.createElement('a');
+      fileInfo.href = fileObj.fileData;
+      fileInfo.download = fileObj.fileName;
+      fileInfo.className = 'flex items-center space-x-2 underline text-xs hover:opacity-80 font-mono';
+      fileInfo.innerHTML = `<i class="fa-solid fa-download"></i> <span>${escapeHtml(fileObj.fileName)}</span>`;
+      
+      bubble.appendChild(fileInfo);
+
+      const time = document.createElement('span');
+      time.className = 'text-[10px] text-slate-400 mt-1 px-1';
+      time.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      wrapper.appendChild(bubble);
+      wrapper.appendChild(time);
+      chatMessages.appendChild(wrapper);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    // System Log Message
+    function appendSystemMessage(text) {
+      const div = document.createElement('div');
+      div.className = 'text-center my-2';
+      div.innerHTML = `<span class="bg-slate-800 text-slate-400 text-xs px-3 py-1 rounded-full border border-slate-700/60">${escapeHtml(text)}</span>`;
+      chatMessages.appendChild(div);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    // Status Badge Updater
+    function updateStatus(state, label) {
+      statusText.textContent = label;
+      statusBadge.className = 'px-3 py-1 rounded-full text-xs font-semibold flex items-center space-x-1.5 border ';
+
+      if (state === 'connected') {
+        statusBadge.className += 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
+      } else if (state === 'connecting') {
+        statusBadge.className += 'bg-blue-500/10 text-blue-400 border-blue-500/20';
+      } else if (state === 'waiting') {
+        statusBadge.className += 'bg-amber-500/10 text-amber-400 border-amber-500/20';
+      } else {
+        statusBadge.className += 'bg-rose-500/10 text-rose-400 border-rose-500/20';
+      }
+    }
+
+    // Toast Notification System
+    function showToast(msg, type = 'info') {
+      const toast = document.getElementById('toast');
+      const toastMsg = document.getElementById('toast-msg');
+      const toastIcon = document.getElementById('toast-icon');
+
+      toastMsg.textContent = msg;
+
+      if (type === 'error') {
+        toast.className = toast.className.replace(/bg-\w+-\d+/, 'bg-rose-600');
+        toastIcon.className = 'fa-solid fa-circle-exclamation';
+      } else if (type === 'success') {
+        toast.className = toast.className.replace(/bg-\w+-\d+/, 'bg-emerald-600');
+        toastIcon.className = 'fa-solid fa-circle-check';
+      } else if (type === 'warning') {
+        toast.className = toast.className.replace(/bg-\w+-\d+/, 'bg-amber-600');
+        toastIcon.className = 'fa-solid fa-triangle-exclamation';
+      } else {
+        toast.className = toast.className.replace(/bg-\w+-\d+/, 'bg-indigo-600');
+        toastIcon.className = 'fa-solid fa-circle-info';
+      }
+
+      toast.classList.remove('translate-y-20', 'opacity-0');
+      setTimeout(() => {
+        toast.classList.add('translate-y-20', 'opacity-0');
+      }, 3000);
+    }
+
+    // Audio sound effect with Web Audio API
+    function playAudioNotification() {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+        osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.15); // A5
+
+        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        osc.start();
+        osc.stop(ctx.currentTime + 0.15);
+      } catch (e) {
+        // AudioContext may be blocked before user interaction
+      }
+    }
+
+    // Copy My Peer ID
+    btnCopyId.addEventListener('click', () => {
+      if (!myPeerId) return;
+      myPeerIdInput.select();
+      document.execCommand('copy');
+      showToast('Peer IDをクリップボードにコピーしました', 'success');
+    });
+
+    // Clear Chat Log
+    btnClear.addEventListener('click', () => {
+      chatMessages.innerHTML = '';
+      appendSystemMessage('ログをクリアしました');
+    });
+
+    // Utility: HTML Escaper
+    function escapeHtml(str) {
+      return str.replace(/[&<>"']/g, (m) => {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m];
+      });
+    }
+
+    // Initialize on load
+    window.onload = initPeer;
+  </script>
+</body>
+</html>
